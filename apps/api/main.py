@@ -1,126 +1,139 @@
 import os
 import shutil
-import torch
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import urllib.parse
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from youtube_transcript_api import YouTubeTranscriptApi
 
-# LlamaIndex imports for the Ingestion Phase
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from services.graph_service import query_document
+# Import your graph generation and chat functions
+from services.graph_service import process_document, query_document
+from services.generate_quiz import router as quiz_router
 
-# Import our Groq-powered Agent pipeline
-from services.graph_service import generate_graph_from_llm
+app = FastAPI()
+app.include_router(quiz_router)
 
-app = FastAPI(title="Flowww AI Backend")
-
-# ---------------------------------------------------------
-# 1. CORS CONFIGURATION (The "Timeout Fix")
-# ---------------------------------------------------------
-# This allows Next.js (port 3000) to send large files directly 
-# to FastAPI (port 8000), completely bypassing the proxy limits.
+# Enable CORS so your Next.js frontend can talk to FastAPI
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------
-# 2. GLOBAL EMBEDDING SETUP (Local RTX 3050)
-# ---------------------------------------------------------
-# We use the GPU strictly for embeddings (fast & free). 
-# Text generation is handled by Groq in graph_service.py.
-device = "cuda" if torch.cuda.is_available() else "cpu"
-Settings.embed_model = HuggingFaceEmbedding(
-    model_name="BAAI/bge-small-en-v1.5",
-    device=device
-)
-
-# Ensure our directories exist
-UPLOAD_DIR = "./uploads"
-STORAGE_DIR = "./storage"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STORAGE_DIR, exist_ok=True)
-
-
-# ---------------------------------------------------------
-# 3. ROUTES
-# ---------------------------------------------------------
-
-@app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)):
-    """
-    Receives the PDF from the browser, saves it, and immediately 
-    processes it into vector embeddings using the local GPU.
-    """
-    try:
-        # Step A: Save the physical file
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        print(f"📄 Received {file.filename}. Starting ingestion...")
-        
-        # Step B: Read the PDF
-        documents = SimpleDirectoryReader(input_files=[file_path]).load_data()
-        
-        # Step C: Create Embeddings & Save to local Vector DB
-        print(f"🧠 Creating vector embeddings on {device.upper()}...")
-        index = VectorStoreIndex.from_documents(documents)
-        index.storage_context.persist(persist_dir=STORAGE_DIR)
-        
-        print("✅ Vector DB updated successfully.")
-        return {"filename": file.filename, "status": "success"}
-        
-    except Exception as e:
-        print(f"❌ Upload/Ingestion Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/generate-flow")
-async def generate_flow(topic: str = "Main Concepts"):
-    """
-    Triggers the Groq AI agents to read the vector DB and 
-    generate the JSON graph.
-    """
-    try:
-        print(f"🚀 Starting graph generation for topic: {topic}")
-        # Call the dual-agent Groq pipeline
-        graph_data = generate_graph_from_llm(topic)
-        
-        if "error" in graph_data:
-            raise HTTPException(status_code=500, detail=graph_data["error"])
-            
-        return graph_data
-        
-    except Exception as e:
-        print(f"❌ Generation Route Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+# ==========================================
+# 1. API Schemas
+# ==========================================
 class ChatRequest(BaseModel):
     question: str
 
+class YouTubeRequest(BaseModel):
+    url: str
+
+# ==========================================
+# 2. Helper Functions
+# ==========================================
+def extract_video_id(url: str) -> str:
+    """A robust YouTube URL parser to guarantee we get the video ID."""
+    try:
+        parsed_url = urllib.parse.urlparse(url)
+        if parsed_url.hostname == 'youtu.be':
+            return parsed_url.path[1:]
+        if parsed_url.hostname in ('www.youtube.com', 'youtube.com'):
+            if parsed_url.path == '/watch':
+                p = urllib.parse.parse_qs(parsed_url.query)
+                return p['v'][0]
+            if parsed_url.path.startswith('/embed/'):
+                return parsed_url.path.split('/')[2]
+    except Exception as e:
+        print(f"URL Parsing Error: {e}")
+    return None
+
+# ==========================================
+# 3. API Routes
+# ==========================================
+
+# --- Route 1: PDF File Upload ---
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Receives a PDF from the frontend and saves it to the uploads folder."""
+    try:
+        os.makedirs("uploads", exist_ok=True)
+        file_path = f"uploads/{file.filename}"
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        return {"filename": file.filename}
+    except Exception as e:
+        print(f"❌ Upload Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Route 2: Generate Graph from PDF ---
+@app.get("/api/generate-flow")
+async def generate_flow(topic: str):
+    """Takes the uploaded PDF filename, processes it, and returns the Mind Map JSON."""
+    try:
+        file_path = f"uploads/{topic}"
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on server.")
+            
+        print("🧠 Passing PDF to the AI Agent pipeline...")
+        graph_data = process_document(file_path)
+        return graph_data
+    except Exception as e:
+        print(f"❌ Graph Generation Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Route 3: YouTube Import ---
+@app.post("/api/youtube")
+async def process_youtube(request: YouTubeRequest):
+    """Downloads YouTube subtitles and turns them into a Mind Map."""
+    try:
+        video_id = extract_video_id(request.url)
+        if not video_id:
+            raise HTTPException(status_code=400, detail="Could not extract a valid YouTube Video ID.")
+
+        print(f"📺 Fetching transcript for video: {video_id}...")
+        
+        ytt_api = YouTubeTranscriptApi()
+        fetched_transcript = ytt_api.fetch(video_id)
+        
+        # NEW SYNTAX: 't' is now an object, so we use t.text instead of t['text']
+        full_text = " ".join([t.text for t in fetched_transcript])
+        
+        os.makedirs("uploads", exist_ok=True)
+        file_path = f"uploads/{video_id}.txt"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(full_text)
+            
+        print("🧠 Passing YouTube text to the AI Agent pipeline...")
+        graph_data = process_document(file_path) 
+        
+        return graph_data
+
+    except Exception as e:
+        print(f"❌ YouTube Route Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Route 4: Chat with Document ---
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    """
-    Receives a question from the UI and passes it to the Gemini RAG engine.
-    """
+    """Receives a question from the UI and passes it to the Gemini RAG engine."""
     try:
         response = query_document(request.question)
         if "error" in response:
             raise HTTPException(status_code=400, detail=response["error"])
         return response
     except Exception as e:
-        print(f"❌ Route Error: {e}")
+        print(f"❌ Chat Route Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ---------------------------------------------------------
-# 4. SERVER EXECUTION
-# ---------------------------------------------------------
+
 if __name__ == "__main__":
     import uvicorn
-    # Use host="0.0.0.0" to prevent IPv4/IPv6 socket hang-ups
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

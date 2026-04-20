@@ -1,0 +1,54 @@
+// apps/web/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String   // This will hold the Clerk User ID
+  title       String   // e.g., "YouTube Lecture" or "biology_notes.pdf"
+  graphData   String   // We will stringify the JSON graph from Groq
+  chatHistory String?  // We will stringify the Gemini chat logs
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Group {
+  id          String         @id @default(cuid())
+  name        String
+  quizData     Json?
+  inviteCode  String         @unique // 6-digit code like 'FLW-92X'
+  hostId      String         // Clerk User ID of the creator
+  isQuizActive Boolean       @default(false)
+  createdAt   DateTime       @default(now())
+  
+  members     GroupMember[]
+  documents   GroupDocument[]
+}
+
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String   // Clerk User ID
+  joinedAt  DateTime @default(now())
+
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId]) // A user can only join a group once
+}
+
+model GroupDocument {
+  id          String   @id @default(cuid())
+  groupId     String
+  fileName    String   // Name of the PDF uploaded
+  uploadedBy  String   // Clerk User ID of whoever uploaded it
+  createdAt   DateTime @default(now())
+
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+}
