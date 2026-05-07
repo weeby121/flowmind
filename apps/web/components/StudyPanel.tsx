@@ -4,7 +4,10 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function StudyPanel({ data }: { data: any }) {
+// Dynamic Backend URL for Deployment
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
+
+export default function StudyPanel({ data, activeSessionFiles = [] }: { data: any, activeSessionFiles?: string[] }) {
   const [messages, setMessages] = useState<{role: 'user' | 'ai', text: string}[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -20,8 +23,14 @@ export default function StudyPanel({ data }: { data: any }) {
     setIsTyping(true);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: userMessage })
+      // UPDATED: Using dynamic BACKEND_URL
+      const response = await fetch(`${BACKEND_URL}/api/chat`, {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ 
+          question: userMessage,
+          filenames: activeSessionFiles 
+        })
       });
       const resData = await response.json();
       setMessages(prev => [...prev, { role: 'ai', text: resData.answer }]);

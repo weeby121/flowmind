@@ -4,6 +4,7 @@ import urllib.parse
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Optional
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # Import your graph generation and chat functions
@@ -27,6 +28,7 @@ app.add_middleware(
 # ==========================================
 class ChatRequest(BaseModel):
     question: str
+    filenames: Optional[List[str]] = [] # NEW: Accept filenames from frontend
 
 class YouTubeRequest(BaseModel):
     url: str
@@ -102,7 +104,6 @@ async def process_youtube(request: YouTubeRequest):
         ytt_api = YouTubeTranscriptApi()
         fetched_transcript = ytt_api.fetch(video_id)
         
-        # NEW SYNTAX: 't' is now an object, so we use t.text instead of t['text']
         full_text = " ".join([t.text for t in fetched_transcript])
         
         os.makedirs("uploads", exist_ok=True)
@@ -123,9 +124,11 @@ async def process_youtube(request: YouTubeRequest):
 # --- Route 4: Chat with Document ---
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    """Receives a question from the UI and passes it to the Gemini RAG engine."""
+    """Receives a question and specific filenames, then passes them to the Gemini RAG engine."""
     try:
-        response = query_document(request.question)
+        # Pass BOTH the question and the scoped filenames down to LlamaIndex
+        response = query_document(request.question, request.filenames)
+        
         if "error" in response:
             raise HTTPException(status_code=400, detail=response["error"])
         return response

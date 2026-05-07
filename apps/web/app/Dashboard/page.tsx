@@ -1,16 +1,26 @@
 "use client";
 
 import { useRef, useState, useEffect } from 'react';
-import { useUser } from "@clerk/nextjs"; // Added for Role-Based checks
+import { useUser, useClerk } from "@clerk/nextjs";
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, TestTube, User, LogOut, Swords, Users, Layers, Plus } from 'lucide-react';
+import { Sparkles, TestTube, User, LogOut, Swords, Users, Layers, Plus, Trophy } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import FlowCanvas from '@/components/FlowCanvas';
 import StudyPanel from '@/components/StudyPanel';
 import FileUpload from '@/components/FileUpload';
 
+// Helper to extract YouTube ID so frontend matches backend's saved .txt file
+const getYoutubeVideoId = (url: string) => {
+  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/);
+  return match ? match[1] : null;
+};
+
+// Dynamic Backend URL for Deployment
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
+
 export default function Dashboard() {
-  const { user } = useUser(); // Get the current Clerk user
+  const { user } = useUser();
+  const { signOut } = useClerk();
 
   // --- Core App Mode ---
   const [appMode, setAppMode] = useState<'personal' | 'group'>('personal');
@@ -23,6 +33,7 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [ytUrl, setYtUrl] = useState('');
+  const [activeSessionFiles, setActiveSessionFiles] = useState<string[]>([]); // Tracks active files for RAG isolation
 
   // --- Group Mode States ---
   const [activeGroup, setActiveGroup] = useState<any>(null);
@@ -38,6 +49,7 @@ export default function Dashboard() {
   const [score, setScore] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [isQuizFinished, setIsQuizFinished] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]); 
 
   // --- Logic: Host a Room ---
   const handleHostRoom = async () => {
@@ -87,7 +99,7 @@ export default function Dashboard() {
     try {
       const filenames = groupDocs.map(doc => doc.fileName);
       
-      const res = await fetch('http://127.0.0.1:8000/api/generate-quiz', {
+      const res = await fetch(`${BACKEND_URL}/api/generate-quiz`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filenames })
@@ -136,6 +148,7 @@ export default function Dashboard() {
     setScore(0);
     setIsQuizFinished(false);
     setSelectedAnswer(null);
+    setLeaderboard([]);
   };
 
   const handleGroupFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -147,7 +160,7 @@ export default function Dashboard() {
     formData.append('file', file);
 
     try {
-      const pythonRes = await fetch('http://127.0.0.1:8000/api/upload', { 
+      const pythonRes = await fetch(`${BACKEND_URL}/api/upload`, { 
         method: 'POST', 
         body: formData 
       });
@@ -173,6 +186,24 @@ export default function Dashboard() {
     }
   };
 
+  // Submit Score when Finished
+  useEffect(() => {
+    if (isQuizFinished && activeGroup) {
+      const submitScore = async () => {
+        try {
+          await fetch(`/api/groups/${activeGroup.id}/leaderboard`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ score })
+          });
+        } catch (error) {
+          console.error("Failed to submit score", error);
+        }
+      };
+      submitScore();
+    }
+  }, [isQuizFinished, activeGroup, score]);
+
   // Fetch Session History (Personal)
   useEffect(() => {
     const fetchSessions = async () => {
@@ -187,41 +218,43 @@ export default function Dashboard() {
   }, []);
 
   // --- UNIFIED CACHE-BUSTING HEARTBEAT ---
-  // Fixes the "Must refresh" and "Battle not starting" issues for joined members
   useEffect(() => {
-    if (!activeGroup || isQuizPlaying) return;
+    if (!activeGroup) return;
 
     const pollDatabase = async () => {
       try {
         const timestamp = Date.now();
         
-        // 1. Refresh Documents Pool
-        const docRes = await fetch(`/api/groups/${activeGroup.id}/documents?t=${timestamp}`);
-        if (docRes.ok) {
-          const docs = await docRes.json();
-          setGroupDocs(docs);
-        }
+        if (!isQuizPlaying && !isQuizFinished) {
+          const docRes = await fetch(`/api/groups/${activeGroup.id}/documents?t=${timestamp}`);
+          if (docRes.ok) setGroupDocs(await docRes.json());
 
-        // 2. Sync Quiz Initiation Status
-        if (!quizData) {
-          const syncRes = await fetch(`/api/groups/${activeGroup.id}/sync?t=${timestamp}`);
-          if (syncRes.ok) {
-            const syncData = await syncRes.json();
-            if (syncData.isQuizActive && syncData.quizData) {
-              setQuizData(syncData.quizData);
+          if (!quizData) {
+            const syncRes = await fetch(`/api/groups/${activeGroup.id}/sync?t=${timestamp}`);
+            if (syncRes.ok) {
+              const syncData = await syncRes.json();
+              if (syncData.isQuizActive && syncData.quizData) {
+                setQuizData(syncData.quizData);
+              }
             }
           }
         }
+
+        if (isQuizFinished) {
+          const lbRes = await fetch(`/api/groups/${activeGroup.id}/leaderboard?t=${timestamp}`);
+          if (lbRes.ok) setLeaderboard(await lbRes.json());
+        }
+
       } catch (err) {
         console.error("Polling Error:", err);
       }
     };
 
-    pollDatabase(); // Run once immediately
-    const intervalId = setInterval(pollDatabase, 3000); // Poll every 3 seconds
+    pollDatabase();
+    const intervalId = setInterval(pollDatabase, 3000);
 
     return () => clearInterval(intervalId);
-  }, [activeGroup, quizData, isQuizPlaying]);
+  }, [activeGroup, quizData, isQuizPlaying, isQuizFinished]);
 
   const handleNewCanvas = () => {
     setStatus('idle');
@@ -232,50 +265,77 @@ export default function Dashboard() {
     setYtUrl('');
   };
 
+  // --- UPDATED: Load Session with Scoped Files ---
   const handleLoadSession = async (sessionId: string) => {
-    setStatus('analyzing');
-    setActiveSessionId(sessionId);
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`);
-      if (!res.ok) throw new Error("Failed to load session");
-      const data = await res.json();
-      setGraphData(data.graphData);
-      const summaryData = { type: 'main', title: data.title, content: data.graphData.summary };
-      setResearchData(summaryData);
-      setActivePanelData(summaryData);
-      setStatus('complete');
-    } catch (error) {
-      console.error(error);
-      setStatus('idle');
-    }
-  };
+      setStatus('analyzing');
+      setActiveSessionId(sessionId);
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}`);
+        if (!res.ok) throw new Error("Failed to load session");
+        const data = await res.json();
+        
+        setGraphData(data.graphData);
 
+        // Map the stored string back into the activeSessionFiles array
+        setActiveSessionFiles(data.filenames ? data.filenames.split(',') : []);
+
+        const summaryData = { type: 'main', title: data.title, content: data.graphData.summary };
+        setResearchData(summaryData);
+        setActivePanelData(summaryData);
+        setStatus('complete');
+      } catch (error) {
+        console.error(error);
+        setStatus('idle');
+      }
+    };
+
+  // --- UPDATED: Save Correct Filenames during Upload ---
   const handleUploadSuccess = async (source: string, isYoutube: boolean = false) => {
     setStatus('analyzing');
     try {
       let response;
+      let targetFile = source; // Default to the source string (PDF filename)
+
       if (isYoutube) {
-        response = await fetch(`http://127.0.0.1:8000/api/youtube`, {
+        response = await fetch(`${BACKEND_URL}/api/youtube`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: source })
         });
+        
+        // Ensure frontend tracks the exact `.txt` file Python creates for YouTube
+        const vidId = getYoutubeVideoId(source);
+        if (vidId) {
+          targetFile = `${vidId}.txt`;
+        }
       } else {
-        response = await fetch(`http://127.0.0.1:8000/api/generate-flow?topic=${encodeURIComponent(source)}`);
+        response = await fetch(`${BACKEND_URL}/api/generate-flow?topic=${encodeURIComponent(source)}`);
       }
+
       if (!response.ok) throw new Error("AI Generation failed");
       const data = await response.json();
+      
       const displayTitle = isYoutube ? 'YouTube Overview' : source;
       const mainSummary = { type: 'main', title: displayTitle, content: data.summary };
+      
       setResearchData(mainSummary);
       setActivePanelData(mainSummary);
       setGraphData(data);
       setStatus('complete');
+
+      // Set the active file using the corrected target format
+      setActiveSessionFiles([targetFile]); 
+
       const dbResponse = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: isYoutube ? "YouTube Lecture" : source, graphData: data })
+        body: JSON.stringify({ 
+          title: isYoutube ? "YouTube Lecture" : source, 
+          graphData: data,
+          filenames: targetFile // Save correct identifier
+        })
       });
+      
       if (dbResponse.ok) {
         const savedSession = await dbResponse.json();
         setSessions(prev => [savedSession, ...prev]);
@@ -284,7 +344,7 @@ export default function Dashboard() {
     } catch (error) {
       console.error(error);
       setStatus('idle');
-      alert("AI Backend is acting up. Check port 8000.");
+      alert("AI Backend is acting up.");
     }
   };
 
@@ -299,7 +359,6 @@ export default function Dashboard() {
   return (
     <div className="flex h-screen w-full bg-[#050505] text-slate-200 overflow-hidden font-sans">
       
-      {/* LEFT: Sidebar */}
       <aside className="w-72 flex-shrink-0 border-r border-white/5 bg-[#0a0a0c] z-40">
         <Sidebar 
           sessions={sessions} 
@@ -311,7 +370,6 @@ export default function Dashboard() {
         />
       </aside>
 
-      {/* CENTER: Main Canvas Area */}
       <main className="relative flex-grow h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900/50 via-[#050505] to-black">
         
         {/* Floating Top Right Buttons */}
@@ -320,14 +378,17 @@ export default function Dashboard() {
             <User size={16} />
             <span>Profile</span>
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl text-sm font-medium transition-colors">
+          
+          <button 
+            onClick={() => signOut({ redirectUrl: '/' })}
+            className="flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl text-sm font-medium transition-colors"
+          >
             <LogOut size={16} />
             <span>Logout</span>
           </button>
         </div>
 
         <AnimatePresence mode="wait">
-          {/* --- MODE: PERSONAL --- */}
           {appMode === 'personal' && (
             <motion.div key="personal-mode" className="w-full h-full">
               <AnimatePresence mode="wait">
@@ -340,7 +401,7 @@ export default function Dashboard() {
                       <Sparkles className="text-indigo-400" size={32} />
                     </div>
                     <h2 className="text-2xl font-bold text-white mb-2">Empty Canvas</h2>
-                    <p className="text-slate-500 max-w-sm">Upload a source from the right panel to start your visual study session.</p>
+                    <p className="text-slate-500 max-sm">Upload a source from the right panel to start your visual study session.</p>
                   </motion.div>
                 )}
                 {status === 'analyzing' && (
@@ -358,7 +419,6 @@ export default function Dashboard() {
             </motion.div>
           )}
 
-          {/* --- MODE: GROUP (BATTLE ROOM HUB) --- */}
           {appMode === 'group' && (
             <motion.div 
               key="group-hub" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
@@ -392,7 +452,7 @@ export default function Dashboard() {
                         <input 
                           type="text" value={joinCodeInput} onChange={(e) => setJoinCodeInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && handleJoinRoom()}
-                          placeholder="FLW-CODE" maxLength={10} // Fixed maxLength to 10
+                          placeholder="FLW-CODE" maxLength={10}
                           className="flex-grow bg-black/50 border border-white/10 rounded-xl px-4 py-4 text-center uppercase font-bold text-white focus:border-indigo-500 focus:outline-none transition-all"
                         />
                         <button onClick={handleJoinRoom} disabled={isGroupActionLoading || !joinCodeInput} className="px-8 rounded-xl bg-slate-800 text-white font-medium disabled:opacity-50">Enter</button>
@@ -401,7 +461,6 @@ export default function Dashboard() {
                   </div>
                 </div>
               ) : !quizData ? (
-                /* --- THE LOBBY / WAR ROOM --- */
                 <div className="w-full h-full max-w-5xl flex flex-col pt-10">
                   <div className="flex items-center justify-between bg-white/5 border border-white/10 rounded-3xl p-6 mb-8">
                     <div>
@@ -446,7 +505,6 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* ROLE-BASED ACTION BAR */}
                   <div className="mt-8 p-6 bg-indigo-950/30 border border-indigo-500/20 rounded-3xl flex justify-between items-center">
                     {user?.id === activeGroup.hostId ? (
                       <>
@@ -472,7 +530,6 @@ export default function Dashboard() {
                   </div>
                 </div>
               ) : (
-                /* --- THE QUIZ ARENA --- */
                 <div className="w-full h-full max-w-4xl flex flex-col items-center justify-center text-center animate-in fade-in zoom-in p-8">
                   {!isQuizPlaying ? (
                     <div>
@@ -482,10 +539,36 @@ export default function Dashboard() {
                       <button onClick={() => setIsQuizPlaying(true)} className="px-12 py-5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xl shadow-lg transition-all hover:scale-105">ENTER ARENA</button>
                     </div>
                   ) : isQuizFinished ? (
-                    <div className="text-center bg-white/5 border border-white/10 p-12 rounded-[3rem] w-full max-w-2xl shadow-2xl">
-                      <h2 className="text-3xl font-bold text-white mb-2">Battle Complete!</h2>
-                      <div className="text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-indigo-400 to-violet-600 mb-8">{score} <span className="text-4xl text-slate-600">/ {quizData.length}</span></div>
-                      <button onClick={handleLeaveRoom} className="px-8 py-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold transition-all border border-white/10">Return to Hub</button>
+                    <div className="w-full flex gap-8 h-full max-h-[600px]">
+                      <div className="w-1/2 bg-white/5 border border-white/10 p-10 rounded-[3rem] flex flex-col justify-center items-center">
+                        <h2 className="text-3xl font-bold text-white mb-2">Battle Complete!</h2>
+                        <div className="text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-indigo-400 to-violet-600 mb-8">{score} <span className="text-4xl text-slate-600">/ {quizData.length}</span></div>
+                        <button onClick={handleLeaveRoom} className="px-8 py-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold transition-all border border-white/10 w-full">Return to Hub</button>
+                      </div>
+                      
+                      <div className="w-1/2 bg-[#0a0a0c] border border-white/10 p-8 rounded-[3rem] shadow-2xl flex flex-col">
+                        <div className="flex items-center gap-3 mb-6 pb-6 border-b border-white/5">
+                          <div className="p-3 bg-amber-500/10 rounded-xl"><Trophy className="text-amber-500" size={24} /></div>
+                          <h3 className="text-2xl font-bold text-white">Live Rankings</h3>
+                        </div>
+                        <div className="flex-grow overflow-y-auto space-y-3 custom-scrollbar pr-2">
+                          {leaderboard.length === 0 ? (
+                             <p className="text-slate-500 text-sm mt-10">Awaiting other warriors...</p>
+                          ) : (
+                            leaderboard.map((member, idx) => (
+                              <div key={idx} className="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5">
+                                <div className="flex items-center gap-4">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${idx === 0 ? 'bg-amber-500/20 text-amber-500' : idx === 1 ? 'bg-slate-300/20 text-slate-300' : idx === 2 ? 'bg-orange-700/20 text-orange-500' : 'bg-white/5 text-slate-500'}`}>
+                                    {idx + 1}
+                                  </div>
+                                  <span className="font-bold text-white">{member.userName}</span>
+                                </div>
+                                <span className="text-indigo-400 font-black text-lg">{member.score} <span className="text-sm text-slate-500 font-medium">pts</span></span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div className="w-full max-w-3xl">
@@ -516,7 +599,6 @@ export default function Dashboard() {
         </AnimatePresence>
       </main>
 
-      {/* RIGHT PANEL: Personal Mode Only */}
       <AnimatePresence>
         {appMode === 'personal' && (
           <motion.aside initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 50 }} className="w-[450px] flex-shrink-0 border-l border-white/10 bg-[#0a0a0c]/90 backdrop-blur-2xl z-30 overflow-y-auto">
@@ -537,7 +619,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-              ) : <StudyPanel data={activePanelData} />}
+              ) : <StudyPanel data={activePanelData} activeSessionFiles={activeSessionFiles} />}
             </AnimatePresence>
           </motion.aside>
         )}
