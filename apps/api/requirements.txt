@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+llama-index
+llama-index-embeddings-google-genai
+llama-index-llms-gemini
+groq
+youtube-transcript-api
+PyPDF2
+python-multipart
