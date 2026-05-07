@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend # Path to your backend folder
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/storage:/app/storage # Persists your AI storage locally
+
+  frontend:
+    build: ./apps/web # Path to your Next.js folder
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      - backend
