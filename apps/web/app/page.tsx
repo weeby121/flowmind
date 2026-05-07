@@ -3,6 +3,20 @@
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { Layers, ArrowRight, Zap, TestTube, FileText, Sparkles } from 'lucide-react';
+import { Variants } from 'framer-motion';
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: { 
+    opacity: 1, 
+    y: 0, 
+    transition: { 
+      type: "spring", 
+      stiffness: 100 
+    } 
+  },
+} as const;
+
 
 export default function LandingPage() {
   // Framer Motion variants for staggered animations
