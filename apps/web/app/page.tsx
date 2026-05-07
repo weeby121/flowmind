@@ -5,33 +5,34 @@ import { motion } from 'framer-motion';
 import { Layers, ArrowRight, Zap, TestTube, FileText, Sparkles } from 'lucide-react';
 import { Variants } from 'framer-motion';
 
-const itemVariants = {
+
+
+
+export default function LandingPage() {
+  // Framer Motion variants for staggered animations
+  const containerVariants: Variants = {
   hidden: { opacity: 0, y: 20 },
   visible: { 
     opacity: 1, 
     y: 0, 
     transition: { 
-      type: "spring", 
+      type: "spring", // TypeScript now knows this MUST be "spring" | "tween" | "inertia"
+      stiffness: 100 
+    } 
+  },
+};
+
+  const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: { 
+    opacity: 1, 
+    y: 0, 
+    transition: { 
+      type: "spring", // TypeScript is widening this to 'string'
       stiffness: 100 
     } 
   },
 } as const;
-
-
-export default function LandingPage() {
-  // Framer Motion variants for staggered animations
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: { staggerChildren: 0.2, delayChildren: 0.1 }
-    }
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 100 } }
-  };
 
   return (
     <div className="min-h-screen bg-[#0B0C10] text-slate-200 font-sans selection:bg-indigo-500/30 overflow-hidden relative">

@@ -67,8 +67,14 @@ export default function FlowCanvas({ data, onNodeSelect, onPaneClick }: any) {
         className="bg-transparent"
       >
         {/* Soft, friendly dot pattern */}
-        <Background color="#cbd5e1" gap={25} size={1.5} opacity={0.1} />
-        <Controls className="bg-[#1A1C23] border border-white/5 rounded-xl shadow-lg" buttonClassName="!bg-transparent !border-b !border-white/5 hover:!bg-white/5 !fill-slate-400" />
+        <Background 
+          color="#cbd5e1" 
+          gap={25} 
+          size={1.5} 
+          style={{ opacity: 0.1 }} 
+        />
+        <Controls 
+  className="bg-[#1A1C23] border border-white/5 rounded-xl shadow-lg overflow-hidden" />
       </ReactFlow>
     </div>
   );
