@@ -4,6 +4,19 @@
 import { UserProfile } from "@clerk/nextjs";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { Variants } from 'framer-motion';
+
+const variants: Variants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: { 
+    opacity: 1, 
+    y: 0, 
+    transition: { 
+      type: "spring", // TypeScript now knows this MUST be one of the allowed types
+      stiffness: 100 
+    } 
+  },
+};
 
 export default function ProfilePage() {
   return (
