@@ -3,7 +3,8 @@ uvicorn
 pydantic
 python-dotenv
 llama-index
-llama-index-embeddings-google-genai
+llama-index-embeddings-fastembed
+fastembed
 llama-index-llms-gemini
 groq
 youtube-transcript-api
